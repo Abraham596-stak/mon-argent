@@ -23,7 +23,7 @@ if ("serviceWorker" in navigator) {
   navigator.serviceWorker.addEventListener("controllerchange", () => { if (had && !re) { re = true; location.reload(); } });
   navigator.serviceWorker.register("sw.js", { updateViaCache: "none" }).then(r => { swReg = r; r.update().catch(() => {}); }).catch(() => {});
 }
-const APP_VERSION = "5";
+const APP_VERSION = "6";
 (async () => { try { const v = await (await fetch("version.json?t=" + Date.now(), { cache: "no-store" })).json();
   if (v.v !== APP_VERSION && sessionStorage.getItem("ma-r") !== v.v) { sessionStorage.setItem("ma-r", v.v); (await caches.keys()).forEach(k => caches.delete(k)); location.reload(); } } catch (e) {} })();
 
@@ -34,7 +34,7 @@ const CAT_OUT = [
   ["parents", "Parents", "👪"], ["famille", "Famille", "🏡"], ["couple", "Couple", "❤️"], ["tontine", "Tontine", "🤝"],
   ["poche", "Argent de poche", "👛"], ["sante", "Santé", "💊"], ["etudes", "Études", "📚"], ["habits", "Habits", "👕"],
   ["loisirs", "Sorties & loisirs", "🎉"], ["dons", "Dons & aides", "🎁"], ["equipement", "Équipement & maison", "🛋️"],
-  ["frais", "Frais Mobile Money / banque", "🏧"],
+  ["frais", "Frais Mobile Money / banque", "🏧"], ["dette", "Remboursement de dette", "🧾"],
   ["b_stock", "Business · Stock", "📦"], ["b_pub", "Business · Publicité", "📣"], ["b_livraison", "Business · Livraison", "🚚"], ["b_autre", "Business · Autres frais", "🧾"],
   ["autre", "Autres dépenses", "•"]
 ];
@@ -59,7 +59,7 @@ const weeksLeftInMonth = (d = new Date()) => { // lundis restants dans le mois, 
   while (m <= end) { n++; m.setDate(m.getDate() + 7); } return n; };
 
 /* ---------- état ---------- */
-let me = null, unsub = [], accounts = [], tx = [], fixed = [], goals = [], settings = null, view = "accueil", online = navigator.onLine;
+let me = null, unsub = [], accounts = [], tx = [], fixed = [], goals = [], debts = [], settings = null, view = "accueil", online = navigator.onLine;
 let bilanMonth = monthStart(), bilanTx = null, unlocked = false;
 const col = name => collection(db, "users", me.uid, name);
 const ref = (name, id) => doc(db, "users", me.uid, name, id);
@@ -94,7 +94,7 @@ function loginView(mode = "in") {
   };
 }
 onAuthStateChanged(auth, u => {
-  unsub.forEach(f => f()); unsub = []; accounts = []; tx = []; fixed = []; goals = []; settings = null; bilanTx = null;
+  unsub.forEach(f => f()); unsub = []; accounts = []; tx = []; fixed = []; goals = []; debts = []; settings = null; bilanTx = null;
   if (!u) { me = null; loginView(); return; }
   me = { uid: u.uid, email: u.email, name: u.displayName || u.email.split("@")[0] };
   unlocked = !localStorage.getItem("ma-pin-" + u.uid);
@@ -105,6 +105,7 @@ onAuthStateChanged(auth, u => {
     tx = s.docs.map(d => ({ id: d.id, ...d.data(), _p: d.metadata.hasPendingWrites })).sort((a, b) => b.date.localeCompare(a.date) || b.ts - a.ts); bilanTx = null; render(); }, () => {}));
   unsub.push(onSnapshot(col("fixed"), s => { fixed = s.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => b.amount - a.amount); render(); }, () => {}));
   unsub.push(onSnapshot(col("goals"), s => { goals = s.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (a.order || 0) - (b.order || 0)); render(); }, () => {}));
+  unsub.push(onSnapshot(col("debts"), s => { debts = s.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (a.amount - (a.paid || 0) <= 0) - (b.amount - (b.paid || 0) <= 0) || b.ts - a.ts); render(); }, () => {}));
   render();
 });
 
@@ -147,12 +148,13 @@ function applyTx(b, t, s) {
     if (acc(t.to)) b.update(acc(t.to), { balance: increment(s * t.amount) });
   }
   if (t.kind === "epargne") { if (acc(t.account)) b.update(acc(t.account), { balance: increment(-s * t.amount) }); if (t.goal && goals.find(g => g.id === t.goal)) b.update(ref("goals", t.goal), { saved: increment(s * t.amount) }); }
+  if (t.debt && debts.find(d => d.id === t.debt)) b.update(ref("debts", t.debt), { paid: increment(s * t.amount) });
   if (t.kind === "retrait") { if (acc(t.account)) b.update(acc(t.account), { balance: increment(s * t.amount) }); if (t.goal && goals.find(g => g.id === t.goal)) b.update(ref("goals", t.goal), { saved: increment(-s * t.amount) }); }
 }
 function deleteTx(t) { const b = writeBatch(db); b.delete(ref("tx", t.id)); applyTx(b, t, -1); b.commit().then(() => toast("Opération supprimée")).catch(() => toast("Suppression refusée")); }
 
 /* ---------- vues ---------- */
-const VIEWS = { accueil: "Accueil", operations: "Opérations", budget: "Budget & charges", epargne: "Épargne & projets", bilan: "Bilan du mois", comptes: "Mes comptes" };
+const VIEWS = { accueil: "Accueil", operations: "Opérations", budget: "Budget & charges", epargne: "Épargne & projets", dettes: "Mes dettes", bilan: "Bilan du mois", comptes: "Mes comptes" };
 function header() {
   return `<header class="topbar"><div class="topbar-in"><div class="logo small">mon<b>argent</b></div>
     <div class="top-right"><span class="view-name">${VIEWS[view]}</span><button class="icon-btn" id="menu" aria-label="Menu">⋮</button></div></div></header>`;
@@ -191,6 +193,7 @@ function accueilView() {
     <p class="hint">Pendant ${r.left} jour${r.left > 1 ? "s" : ""}, après tes charges fixes restantes (${FCFA(remainingFixedMonth())}) et l'épargne prévue (${FCFA(r.saveLeft)}).</p></div></section>`}
   ${need ? `<section class="card pad"><div class="label">Revenus de la semaine</div><div class="rav ${wi >= need ? "ok" : "ko"}"><div class="v num">${FCFA(wi)}</div><span class="hint num">objectif ${FCFA(need)}</span></div>
     <div class="bar ${wi >= need ? "" : "warn"}"><i style="width:${Math.min(100, need ? wi / need * 100 : 0)}%"></i></div></section>` : ""}
+  ${debtLeft() ? `<button class="card pad btnli debt-sum" data-go="dettes"><div class="label">Mes dettes</div><div class="rav ko"><div class="v num">${FCFA(debtLeft())}</div><span class="hint">${openDebts().length} à rembourser ›</span></div></button>` : ""}
   <div class="sec"><h2>Mes comptes</h2><button class="link" data-go="comptes">Gérer</button></div>
   <div class="accounts">${accounts.map(a => accCard(a)).join("") || `<div class="card empty">Ajoute tes comptes pour commencer.</div>`}</div>
   ${dueNow.length ? `<div class="sec"><h2>À payer</h2><button class="link" data-go="budget">Tout voir</button></div><div class="card list">${dueNow.map(dueRow).join("")}</div>` : ""}
@@ -247,6 +250,41 @@ function epargneView() {
       <div class="bar"><i style="width:${Math.min(100, r * 100)}%"></i></div>
       <small>${!g.target ? "Touche ⋮ pour fixer le prix." : share || g.saved >= g.target ? horizon(g.target - g.saved, share) : "Touche ⋮ et fixe une part par mois pour savoir quand tu l'atteindras."}</small></div>`; }).join("") || `<div class="empty">Moto, meubles, téléphone, études… Crée un projet et mets de l'argent dedans petit à petit.</div>`}</div>
   </main>${fab()}`;
+}
+const leJour = x => { const p = prettyDay(x).toLowerCase(); return /^(aujourd|hier)/.test(p) ? p : "le " + p; };
+const debtRest = d => Math.max(0, d.amount - (d.paid || 0));
+const openDebts = () => debts.filter(d => debtRest(d) > 0);
+const debtLeft = () => openDebts().reduce((a, d) => a + debtRest(d), 0);
+function debtRow(d) {
+  const r = debtRest(d), p = d.amount ? (d.paid || 0) / d.amount : 0;
+  return `<div class="goal"><div class="top"><b>${esc(d.who)}</b><button class="icon-btn dark" data-d="${d.id}" aria-label="Options">⋮</button></div>
+    <div class="rav"><span class="num">${r ? `Reste <b>${FCFA(r)}</b> sur ${FCFA(d.amount)}` : `<b>${FCFA(d.amount)}</b> remboursés`}</span><span class="tag ${r ? "" : "ok"}">${r ? Math.floor(p * 100) + " %" : "Soldée"}</span></div>
+    <div class="bar"><i style="width:${Math.min(100, p * 100)}%"></i></div>
+    <small>${d.date ? "Depuis " + leJour(d.date) : ""}${d.due ? " · à rendre " + (d.due < dk(new Date()) && debtRest(d) ? "depuis " : "avant ") + leJour(d.due) : ""}${d.note ? " · " + esc(d.note) : ""}</small>
+    ${r ? `<button class="btn btn-primary btn-sm" data-pd="${d.id}">Rembourser</button>` : ""}</div>`;
+}
+function dettesView() {
+  const open = openDebts(), done = debts.filter(d => !debtRest(d));
+  return `${header()}<main class="page">
+  <section class="card pad"><div class="label">Total de mes dettes</div><div class="rav ${debtLeft() ? "ko" : "ok"}"><div class="v num">${FCFA(debtLeft())}</div><span class="hint">${open.length} personne${open.length > 1 ? "s" : ""}</span></div>
+    <p class="hint">Ajouter une dette ne touche pas à tes comptes. L'argent sort seulement quand tu touches « Rembourser ».</p></section>
+  <div class="sec"><h2>À rembourser</h2><button class="link" id="addd">+ Nouvelle dette</button></div>
+  <div class="card">${open.map(debtRow).join("") || `<div class="empty">Aucune dette en cours.</div>`}</div>
+  ${done.length ? `<div class="sec"><h2>Soldées</h2></div><div class="card">${done.map(debtRow).join("")}</div>` : ""}
+  </main>${fab()}`;
+}
+function debtSheet(d = {}) {
+  sheet(d.id ? "Modifier la dette" : "Nouvelle dette", `<label class="fl"><span>À qui je dois</span><input class="field" id="dw" maxlength="40" value="${esc(d.who || "")}" placeholder="ex. Koffi"></label>
+    <label class="fl"><span>Somme due (FCFA)</span><input class="field" id="da" inputmode="numeric" value="${d.amount || ""}"></label>
+    <div class="grid2"><label class="fl"><span>Date</span><input class="field" id="dd" type="date" value="${d.date || dk(new Date())}"></label>
+    <label class="fl"><span>À rendre avant (facultatif)</span><input class="field" id="du" type="date" value="${d.due || ""}"></label></div>
+    <label class="fl"><span>Note (facultatif)</span><input class="field" id="dn" maxlength="80" value="${esc(d.note || "")}" placeholder="ex. pour le stock"></label>`, () => {
+    const v = { who: $("#dw").value.trim(), amount: Math.round(+$("#da").value.replace(/\D/g, "")), date: $("#dd").value || dk(new Date()), due: $("#du").value || "", note: $("#dn").value.trim() };
+    if (!v.who || !v.amount) { $("#se").textContent = "Écris le nom et la somme."; return false; }
+    if (d.id) updateDoc(ref("debts", d.id), v).catch(() => toast("Échec de l'enregistrement."));
+    else setDoc(doc(col("debts")), { ...v, paid: 0, ts: Date.now() }).then(() => {}).catch(() => toast("Échec de l'enregistrement."));
+    toast(d.id ? "Dette modifiée" : "Dette ajoutée · tes comptes ne bougent pas");
+  });
 }
 function bilanView() {
   const list = bilanTx || thisMonth(tx, bilanMonth);
@@ -364,7 +402,7 @@ function render() {
   if ($("#layer .sheet")) return;
   if (settings === null) { $("#app").innerHTML = `<div class="splash"><div class="logo">mon<b>argent</b></div></div>`; return; }
   if (!settings.ready && !accounts.length) { onboardingView(); bindCommon(); return; }
-  const V = { accueil: accueilView, operations: operationsView, budget: budgetView, epargne: epargneView, bilan: bilanView, comptes: comptesView };
+  const V = { dettes: dettesView, accueil: accueilView, operations: operationsView, budget: budgetView, epargne: epargneView, bilan: bilanView, comptes: comptesView };
   $("#app").innerHTML = (V[view] || accueilView)();
   bindCommon(); bindView();
 }
@@ -406,6 +444,14 @@ function bindView() {
   document.querySelectorAll("[data-bud]").forEach(b => b.onclick = () => budgetSheet(b.dataset.bud));
   if ($("#setsave")) $("#setsave").onclick = () => formSheet("Épargne mensuelle visée", [["v", "Montant par mois en FCFA", "number", settings.saveMonth || ""]], v => setDoc(doc(db, "users", me.uid), { saveMonth: +v.v || 0 }, { merge: true }));
   if ($("#addg")) $("#addg").onclick = () => goalSheet();
+  if ($("#addd")) $("#addd").onclick = () => debtSheet();
+  document.querySelectorAll("[data-pd]").forEach(b => b.onclick = () => { const d = debts.find(x => x.id === b.dataset.pd); txSheet("depense", { amount: debtRest(d), cat: "dette", note: d.who, debt: d.id }); });
+  document.querySelectorAll("[data-d]").forEach(b => b.onclick = () => { const d = debts.find(x => x.id === b.dataset.d);
+    openMenu([...(debtRest(d) ? [["pay", "Rembourser", "Tout ou une partie · l'argent sort du compte choisi"]] : []), ["edit", "Modifier", "Nom, somme, date"], ["del", "Supprimer la dette", "Les remboursements déjà faits restent dans l'historique"]], k => {
+      if (k === "pay") txSheet("depense", { amount: debtRest(d), cat: "dette", note: d.who, debt: d.id });
+      if (k === "edit") debtSheet(d);
+      if (k === "del") confirmDo(`Supprimer la dette envers « ${d.who} » ?`, () => deleteDoc(ref("debts", d.id)));
+    }, b.parentElement); });
   document.querySelectorAll("[data-g]").forEach(b => b.onclick = () => { const g = goals.find(x => x.id === b.dataset.g);
     openMenu([["put", "Mettre de l'argent dedans", ""], ["take", "Retirer de l'argent", "Le remettre sur un compte"], ["edit", "Modifier le prix ou la part mensuelle", ""], ["del", "Supprimer le projet", ""]], k => {
       if (k === "put") txSheet("epargne", { goal: g.id });
@@ -449,7 +495,7 @@ const accOptions = sel => accounts.map(a => `<option value="${a.id}" ${a.id === 
 function txSheet(kind, pre = {}) {
   if (!accounts.length) { toast("Ajoute d'abord un compte."); view = "comptes"; render(); return; }
   const last = JSON.parse(localStorage.getItem("ma-last") || "{}");
-  const titles = { depense: "Nouvelle dépense", revenu: "Entrée d'argent", transfert: "Transfert entre comptes", epargne: "Mettre de côté", retrait: "Retirer d'un projet" };
+  const titles = { depense: pre.debt ? "Rembourser " + ((debts.find(d => d.id === pre.debt) || {}).who || "") : "Nouvelle dépense", revenu: "Entrée d'argent", transfert: "Transfert entre comptes", epargne: "Mettre de côté", retrait: "Retirer d'un projet" };
   const cats = kind === "revenu" ? CAT_IN : CAT_OUT;
   const usage = {}; tx.forEach(t => usage[t.cat] = (usage[t.cat] || 0) + 1);
   const sorted = [...cats].sort((a, b) => (usage[b[0]] || 0) - (usage[a[0]] || 0));
@@ -471,6 +517,7 @@ function txSheet(kind, pre = {}) {
     if ($("#goal")) { if (!goals.length) { $("#se").textContent = "Crée d'abord un projet dans Épargne."; return false; } t.goal = $("#goal").value; }
     if (kind === "transfert") { t.to = $("#to").value; t.fee = Math.round(+($("#fee").value || "0").replace(/\D/g, "")); if (t.to === t.account) { $("#se").textContent = "Choisis deux comptes différents."; return false; } }
     if (pre.fixedId) { t.fixedId = pre.fixedId; t.period = pre.period; }
+    if (pre.debt) { const d = debts.find(x => x.id === pre.debt); if (d && amount > debtRest(d)) { $("#se").textContent = `Il ne reste que ${FCFA(debtRest(d))} à rembourser.`; return false; } t.debt = pre.debt; t.cat = "dette"; t.scope = "perso"; }
     const a = accounts.find(x => x.id === t.account);
     if ((kind === "depense" || kind === "transfert" || kind === "epargne") && a && a.balance - amount - (t.fee || 0) < 0 && !w.dataset.forced) {
       w.dataset.forced = "1"; $("#se").textContent = `Le solde de ${a.name} deviendrait négatif (${FCFA(a.balance - amount - (t.fee || 0))}). Vérifie le compte, ou touche encore Enregistrer.`; return false;
