@@ -1,11 +1,16 @@
-# Rappel du soir « As-tu noté tes dépenses ? » (entre 21h et 22h30, heure du Bénin)
-name: Rappel du soir
+# Rappels Mon Argent : 14h30 (dépenses du matin) et 22h30 (dépenses depuis 14h30), heure du Bénin.
+# GitHub lance parfois ses horaires en retard : plusieurs essais, un seul envoi par rappel.
+name: Rappels
 on:
   schedule:
-    - cron: "0 20 * * *"
-    - cron: "20 20 * * *"
-    - cron: "45 20 * * *"
-    - cron: "10 21 * * *"
+    - cron: "30 13 * * *"
+    - cron: "45 13 * * *"
+    - cron: "5 14 * * *"
+    - cron: "35 14 * * *"
+    - cron: "30 21 * * *"
+    - cron: "45 21 * * *"
+    - cron: "5 22 * * *"
+    - cron: "35 22 * * *"
   workflow_dispatch:
 concurrency:
   group: rappel
@@ -22,6 +27,6 @@ jobs:
         with:
           node-version: 20
       - run: npm install --no-audit --no-fund
-      - run: node rappel-soir.mjs
+      - run: node rappel.mjs auto
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}

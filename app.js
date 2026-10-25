@@ -23,7 +23,7 @@ if ("serviceWorker" in navigator) {
   navigator.serviceWorker.addEventListener("controllerchange", () => { if (had && !re) { re = true; location.reload(); } });
   navigator.serviceWorker.register("sw.js", { updateViaCache: "none" }).then(r => { swReg = r; r.update().catch(() => {}); }).catch(() => {});
 }
-const APP_VERSION = "4";
+const APP_VERSION = "5";
 (async () => { try { const v = await (await fetch("version.json?t=" + Date.now(), { cache: "no-store" })).json();
   if (v.v !== APP_VERSION && sessionStorage.getItem("ma-r") !== v.v) { sessionStorage.setItem("ma-r", v.v); (await caches.keys()).forEach(k => caches.delete(k)); location.reload(); } } catch (e) {} })();
 
@@ -371,7 +371,7 @@ function render() {
 function bindCommon() {
   if ($("#menu")) $("#menu").onclick = () => openMenu([
     ...Object.entries(VIEWS).map(([k, n]) => [k, n, ""]),
-    ["notif", "Activer le rappel du soir", "Chaque soir à 21h : « As-tu noté tes dépenses ? »"],
+    ["notif", "Activer les rappels", "14h30 : dépenses du matin · 22h30 : dépenses depuis 14h30"],
     ["install", "Installer l'application", "Icône sur l'écran d'accueil"],
     ["out", "Se déconnecter", esc(me.email)]
   ], k => {
@@ -522,7 +522,7 @@ function openMenu(items, onPick, anchor, current, fixedPos) {
 }
 function toast(t) { document.querySelectorAll(".toast").forEach(x => x.remove()); const el = document.createElement("div"); el.className = "toast"; el.textContent = t; document.body.appendChild(el); setTimeout(() => el.remove(), 3000); }
 
-/* ---------- rappel du soir ---------- */
+/* ---------- rappels 14h30 et 22h30 ---------- */
 async function enableNotifs() {
   try {
     if (!(await isSupported())) { toast("Ce téléphone ne gère pas les rappels ici. Installe d'abord l'application."); return; }
@@ -530,7 +530,7 @@ async function enableNotifs() {
     const reg = swReg || await navigator.serviceWorker.ready;
     const token = await getToken(getMessaging(fb), { vapidKey, serviceWorkerRegistration: reg });
     await setDoc(doc(db, "argentTokens", token), { uid: me.uid, ts: Date.now() });
-    toast("Rappel du soir activé (21h)");
+    toast("Rappels activés : 14h30 et 22h30");
   } catch (e) { toast("Impossible d'activer le rappel. Réessaie avec du réseau."); }
 }
 addEventListener("online", () => { online = true; });
