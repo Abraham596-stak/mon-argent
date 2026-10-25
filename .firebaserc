@@ -1,1 +1,4 @@
-{ "projects": { "default": "mon-argent-d2d8d" } }
+{
+  "projects": { "default": "mon-argent-d2d8d" },
+  "targets": { "mon-argent-d2d8d": { "hosting": { "app": ["monargent-app"] } } }
+}

@@ -1,5 +1,7 @@
 # Mon Argent
 
+En ligne : https://monargent-app.web.app
+
 Application gratuite pour suivre chaque franc : comptes Mobile Money et banque, dépenses, charges fixes, budget, épargne et projets.
 
 - Chaque modification poussée sur `main` est mise en ligne automatiquement.
