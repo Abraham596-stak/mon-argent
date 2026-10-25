@@ -1,0 +1,27 @@
+# Met Mon Argent en ligne à chaque modification
+name: Site
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  deployer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Publier
+        env:
+          SA: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          echo "$SA" > "$RUNNER_TEMP/sa.json"
+          export GOOGLE_APPLICATION_CREDENTIALS="$RUNNER_TEMP/sa.json"
+          SITE=$(node -e 'try{console.log(require("./.firebaserc").targets["mon-argent-d2d8d"].hosting.app[0])}catch(e){}')
+          set +e
+          if [ -n "$SITE" ]; then npx -y firebase-tools@13 deploy --only hosting:app --project mon-argent-d2d8d --non-interactive > out.txt 2>&1
+          else npx -y firebase-tools@13 deploy --only hosting --project mon-argent-d2d8d --non-interactive > out.txt 2>&1; fi
+          code=$?
+          cat out.txt
+          if [ $code -ne 0 ]; then grep -iE "error|permission|denied|not found" out.txt | head -8 | while read -r l; do echo "::error::$l"; done; exit 1; fi
