@@ -159,7 +159,7 @@ h1, h2, h3 { margin: 0; }
 
 /* Fenêtre */
 .sheet { position: fixed; inset: 0; z-index: 50; background: rgba(15,26,22,.45); display: flex; align-items: flex-end; justify-content: center; }
-.sheet .panel { background: #fff; width: 100%; max-width: 560px; border-radius: 16px 16px 0 0;
+.sheet .panel { max-height: 92dvh; overflow-y: auto; overscroll-behavior: contain; background: #fff; width: 100%; max-width: 560px; border-radius: 16px 16px 0 0;
   padding-block: 16px calc(16px + env(safe-area-inset-bottom, 0px)); padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
   display: flex; flex-direction: column; gap: 12px; max-height: 92vh; overflow: auto; }
 @media (min-width: 600px) { .sheet { align-items: center; } .sheet .panel { border-radius: 14px; } }

@@ -23,7 +23,7 @@ if ("serviceWorker" in navigator) {
   navigator.serviceWorker.addEventListener("controllerchange", () => { if (had && !re) { re = true; location.reload(); } });
   navigator.serviceWorker.register("sw.js", { updateViaCache: "none" }).then(r => { swReg = r; r.update().catch(() => {}); }).catch(() => {});
 }
-const APP_VERSION = "3";
+const APP_VERSION = "4";
 (async () => { try { const v = await (await fetch("version.json?t=" + Date.now(), { cache: "no-store" })).json();
   if (v.v !== APP_VERSION && sessionStorage.getItem("ma-r") !== v.v) { sessionStorage.setItem("ma-r", v.v); (await caches.keys()).forEach(k => caches.delete(k)); location.reload(); } } catch (e) {} })();
 
@@ -392,13 +392,13 @@ function bindView() {
   document.querySelectorAll("[data-acc]").forEach(b => b.onclick = () => { view = "comptes"; render(); });
   document.querySelectorAll("[data-ae]").forEach(b => b.onclick = () => { const a = accounts.find(x => x.id === b.dataset.ae);
     openMenu([["fix", "Corriger le solde", "Mettre le montant réel affiché sur ton téléphone"], ["ren", "Renommer", ""], ["del", "Supprimer le compte", "L'historique est gardé"]], k => {
-      if (k === "fix") formSheet("Solde réel de « " + a.name + " »", [["v", "Montant en FCFA", "number", a.balance]], v => updateDoc(ref("accounts", a.id), { balance: +v.v || 0 }).then(() => toast("Solde corrigé")));
+      if (k === "fix") formSheet("Solde réel de « " + a.name + " »", [["v", "Montant en FCFA", "number", a.balance]], v => updateDoc(ref("accounts", a.id), { balance: Math.round(+String(v.v).replace(/[^\d-]/g, "")) || 0 }).then(() => toast("Solde corrigé")));
       if (k === "ren") formSheet("Renommer le compte", [["v", "Nom", "text", a.name]], v => v.v.trim() && updateDoc(ref("accounts", a.id), { name: v.v.trim() }));
       if (k === "del") confirmDo(`Supprimer « ${a.name} » ?`, () => deleteDoc(ref("accounts", a.id)));
     }, b.parentElement); });
   if ($("#adda")) $("#adda").onclick = () => openMenu(Object.entries(ACC_TYPES).map(([k, t]) => [k, t[0], ""]), k =>
     formSheet("Nouveau compte " + ACC_TYPES[k][0], [["n", "Nom (ex. MTN MoMo 2)", "text", ACC_TYPES[k][0]], ["b", "Solde actuel en FCFA", "number", ""]], v =>
-      setDoc(doc(col("accounts")), { name: v.n.trim() || ACC_TYPES[k][0], type: k, balance: +v.b || 0, order: accounts.length })), $("#adda").parentElement);
+      setDoc(doc(col("accounts")), { name: v.n.trim() || ACC_TYPES[k][0], type: k, balance: Math.round(+String(v.b).replace(/[^\d-]/g, "")) || 0, order: accounts.length })), $("#adda").parentElement);
   if ($("#fxm")) $("#fxm").onclick = () => openMenu([["add", "Ajouter une charge fixe", "Loyer, facture, somme donnée chaque semaine…"]], () => fixedSheet(), $("#fxm").parentElement);
   document.querySelectorAll("[data-fx]").forEach(b => b.onclick = () => { const f = fixed.find(x => x.id === b.dataset.fx);
     openMenu([["edit", "Modifier", ""], ["del", "Supprimer", ""]], k => { if (k === "edit") fixedSheet(f); if (k === "del") confirmDo(`Supprimer « ${f.name} » ?`, () => deleteDoc(ref("fixed", f.id))); }, b.parentElement); });
@@ -428,17 +428,20 @@ async function loadMonth(d) {
 function sheet(title, body, onOk, okLabel = "Enregistrer") {
   $("#layer").innerHTML = "";
   const w = document.createElement("div"); w.className = "sheet";
-  w.innerHTML = `<div class="panel" role="dialog" aria-label="${esc(title)}"><div class="sheet-head"><h2>${esc(title)}</h2><button class="icon-btn dark" id="x" aria-label="Fermer">×</button></div>${body}
-    <div class="err" id="se"></div><button class="btn btn-primary" id="ok">${okLabel}</button></div>`;
+  w.innerHTML = `<form class="panel" role="dialog" aria-label="${esc(title)}" novalidate><div class="sheet-head"><h2>${esc(title)}</h2><button type="button" class="icon-btn dark" id="x" aria-label="Fermer">×</button></div>${body}
+    <div class="err" id="se"></div><button type="submit" class="btn btn-primary" id="ok">${okLabel}</button></form>`;
   $("#layer").appendChild(w);
   const close = () => { $("#layer").innerHTML = ""; render(); };
   w.addEventListener("click", e => { if (e.target === w) close(); }); $("#x").onclick = close;
-  $("#ok").onclick = () => { if (onOk(w) !== false) close(); };
+  w.querySelector("form").onsubmit = e => { e.preventDefault(); document.activeElement?.blur(); if (onOk(w) !== false) close(); };
+  w.querySelectorAll("input").forEach(i => i.setAttribute("enterkeyhint", "done"));
+  // garde le champ visible au-dessus du clavier
+  w.addEventListener("focusin", e => setTimeout(() => e.target.scrollIntoView?.({ block: "center" }), 300));
   return w;
 }
 function formSheet(title, fields, onSave) {
   const w = sheet(title, fields.map(([k, l, t, v]) => `<label class="fl"><span>${l}</span><input class="field" id="f-${k}" type="${t}" ${t === "number" ? 'inputmode="numeric"' : ""} value="${esc(v)}"></label>`).join(""),
-    () => { const v = Object.fromEntries(fields.map(([k]) => [k, $("#f-" + k).value])); onSave(v); });
+    () => { const v = Object.fromEntries(fields.map(([k]) => [k, $("#f-" + k).value])); Promise.resolve(onSave(v)).catch(err => toast(err?.code === "permission-denied" ? "Refusé : vérifie les règles Firestore." : "Échec de l'enregistrement. Réessaie.")); });
   setTimeout(() => { const i = w.querySelector("input"); if (i) { i.focus(); i.select(); } }, 50);
 }
 function confirmDo(q, fn) { sheet(q, `<p class="hint">Cette action est définitive.</p>`, () => { fn(); }, "Oui, confirmer"); }
