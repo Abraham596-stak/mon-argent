@@ -23,7 +23,7 @@ if ("serviceWorker" in navigator) {
   navigator.serviceWorker.addEventListener("controllerchange", () => { if (had && !re) { re = true; location.reload(); } });
   navigator.serviceWorker.register("sw.js", { updateViaCache: "none" }).then(r => { swReg = r; r.update().catch(() => {}); }).catch(() => {});
 }
-const APP_VERSION = "6";
+const APP_VERSION = "7";
 (async () => { try { const v = await (await fetch("version.json?t=" + Date.now(), { cache: "no-store" })).json();
   if (v.v !== APP_VERSION && sessionStorage.getItem("ma-r") !== v.v) { sessionStorage.setItem("ma-r", v.v); (await caches.keys()).forEach(k => caches.delete(k)); location.reload(); } } catch (e) {} })();
 
@@ -80,7 +80,8 @@ function loginView(mode = "in") {
       <button class="btn btn-primary">${create ? "Créer mon compte" : "Se connecter"}</button>
       ${create ? "" : `<button type="button" class="link" id="fg">Mot de passe oublié ?</button>`}
       <hr><button type="button" class="btn btn-secondary" id="sw">${create ? "J'ai déjà un compte" : "Créer un nouveau compte"}</button>
-      <p class="hint" style="text-align:center">Tes données sont privées : personne d'autre ne peut les voir.</p></form></div>`;
+      <p class="hint" style="text-align:center">Tes données sont privées : personne d'autre ne peut les voir.</p></form>
+    <details class="card-box aide-login"><summary>C'est quoi Mon Argent ?</summary><div class="rep">${AIDE[0][1]}${AIDE[1][1]}</div></details></div>`;
   $("#sw").onclick = () => loginView(create ? "in" : "new");
   $("#eye").onclick = () => { const f = $("#lp"); f.type = f.type === "password" ? "text" : "password"; };
   if ($("#fg")) $("#fg").onclick = async () => { const m = $("#lm").value.trim(); if (!m) { $("#le").textContent = "Écris ton e-mail d'abord."; return; }
@@ -154,7 +155,7 @@ function applyTx(b, t, s) {
 function deleteTx(t) { const b = writeBatch(db); b.delete(ref("tx", t.id)); applyTx(b, t, -1); b.commit().then(() => toast("Opération supprimée")).catch(() => toast("Suppression refusée")); }
 
 /* ---------- vues ---------- */
-const VIEWS = { accueil: "Accueil", operations: "Opérations", budget: "Budget & charges", epargne: "Épargne & projets", dettes: "Mes dettes", bilan: "Bilan du mois", comptes: "Mes comptes" };
+const VIEWS = { accueil: "Accueil", operations: "Opérations", budget: "Budget & charges", epargne: "Épargne & projets", dettes: "Mes dettes", bilan: "Bilan du mois", comptes: "Mes comptes", aide: "Aide" };
 function header() {
   return `<header class="topbar"><div class="topbar-in"><div class="logo small">mon<b>argent</b></div>
     <div class="top-right"><span class="view-name">${VIEWS[view]}</span><button class="icon-btn" id="menu" aria-label="Menu">⋮</button></div></div></header>`;
@@ -286,6 +287,54 @@ function debtSheet(d = {}) {
     toast(d.id ? "Dette modifiée" : "Dette ajoutée · tes comptes ne bougent pas");
   });
 }
+const AIDE = [
+  ["À quoi sert Mon Argent ?", `<p>Mon Argent sait <b>où va chaque franc</b>. Tu y notes tout ce qui entre et tout ce qui sort, sur tous tes comptes (MTN, Moov, Celtis, banque, espèces…).</p>
+    <p>L'application te dit ensuite combien tu peux dépenser par jour, ce qu'il te reste à payer, combien tu as mis de côté et où part ton argent.</p>
+    <p>Tes données sont privées : personne d'autre ne peut les voir, même pas les autres utilisateurs.</p>`],
+  ["Les 3 règles d'or", `<ol><li><b>Tout noter, même 50 F.</b> Zem, crédit, pain, frais de retrait… Les petites sommes font les grosses fuites.</li>
+    <li><b>Noter tout de suite</b>, ou au plus tard au rappel de 14h30 (pour le matin) et de 22h30 (pour l'après-midi et le soir).</li>
+    <li><b>Les soldes doivent être vrais.</b> Si le solde affiché n'est pas celui de ton téléphone, corrige-le (voir « Corriger un solde »).</li></ol>`],
+  ["Premiers pas (à faire une seule fois)", `<ol><li>Crée ton compte avec ton e-mail et un mot de passe.</li>
+    <li>Coche les comptes que tu utilises (ou charge ton profil s'il est proposé).</li>
+    <li>Menu ⋮ → <b>Mes comptes</b> → ⋮ à côté de chaque compte → <b>Corriger le solde</b> : mets le montant exact que tu as aujourd'hui.</li>
+    <li>Menu ⋮ → <b>Budget & charges</b> : ajoute tes charges fixes (loyer, factures, ce que tu donnes chaque semaine…).</li>
+    <li>Menu ⋮ → <b>Épargne & projets</b> : fixe combien tu veux épargner par mois et crée tes projets.</li>
+    <li>Menu ⋮ → <b>Activer les rappels</b>.</li>
+    <li>Menu ⋮ → <b>Installer l'application</b> pour l'avoir sur l'écran d'accueil.</li></ol>`],
+  ["Noter une dépense", `<ol><li>Touche le bouton vert <b>+</b> en bas.</li><li>Choisis <b>Dépense</b>.</li><li>Écris le montant, choisis la catégorie et le compte qui a payé.</li><li>Touche <b>Enregistrer</b> (ou ✓ sur le clavier).</li></ol>
+    <p>Le solde du compte baisse tout seul. L'application retient ta dernière catégorie et ton dernier compte pour aller plus vite.</p>
+    <p>Pour le business, choisis les catégories qui commencent par « Business » : le bilan sépare alors le business du perso.</p>`],
+  ["Noter une entrée d'argent", `<p><b>+</b> → <b>Entrée d'argent</b> : ventes, salaire, cadeau, remboursement reçu… Choisis le compte qui a reçu l'argent. Son solde monte tout seul.</p>`],
+  ["Transfert entre comptes (MTN → Moov, retrait, dépôt)", `<p><b>+</b> → <b>Transfert entre comptes</b>. Choisis le compte de départ et celui d'arrivée.</p>
+    <p>Un <b>retrait</b> au guichet, c'est un transfert de ton compte Mobile Money vers <b>Espèces</b>. Un <b>dépôt</b>, c'est l'inverse.</p>
+    <p>Mets les <b>frais</b> dans la case prévue : ils sont retirés du compte de départ. Un transfert n'est pas une dépense, il déplace juste ton argent.</p>`],
+  ["Charges fixes : payer le loyer, les parents, la tontine…", `<p>Dans <b>Budget & charges</b>, chaque charge fixe a un bouton <b>Payer</b>. Touche-le quand tu paies : le montant est déjà rempli, choisis le compte et enregistre.</p>
+    <p>La charge passe en « Payé » pour le mois (ou la semaine si elle est hebdomadaire). Elle revient automatiquement le mois ou la semaine suivante.</p>`],
+  ["Le « Reste à vivre »", `<p>C'est ce que tu peux dépenser <b>par jour</b> jusqu'à la fin du mois, sans toucher à tes charges fixes restantes ni à l'épargne prévue.</p>
+    <p>Calcul : ton argent total − les charges encore à payer ce mois − l'épargne pas encore faite, divisé par le nombre de jours restants.</p>
+    <p>S'il est <b style="color:var(--ko,#C0392B)">rouge</b>, tu n'as pas assez pour tout couvrir : réduis tes dépenses ou gagne plus cette semaine.</p>`],
+  ["Revenus de la semaine", `<p>L'accueil compare ce que tu as gagné depuis lundi à ce qu'il te faut par semaine pour payer tes charges et ton épargne. La barre doit être pleine avant dimanche.</p>`],
+  ["Budgets par catégorie", `<p>Dans <b>Budget & charges</b> → <b>+ Ajouter</b>, fixe un plafond par mois (ex. 20 000 F pour les sorties). L'application te prévient dès que tu le dépasses.</p>`],
+  ["Épargne et projets", `<p>Crée un projet (moto, téléphone, études…) avec son prix. Pour mettre de l'argent dedans : <b>+</b> → <b>Mettre de côté</b>, ou ⋮ sur le projet.</p>
+    <p>L'argent quitte ton compte et va dans le projet. Si tu donnes une <b>part par mois</b>, l'application te dit quand tu atteindras le projet.</p>
+    <p>Besoin de cet argent ? ⋮ → <b>Retirer de l'argent</b> : il revient sur le compte choisi.</p>`],
+  ["Mes dettes", `<p><b>Ajouter une dette</b> (menu ⋮ → Mes dettes → + Nouvelle dette) : à qui tu dois, la somme, la date. <b>Tes comptes ne bougent pas.</b></p>
+    <p><b>Rembourser</b> : touche « Rembourser » sur la dette, choisis le compte et la somme (tout ou une partie). C'est seulement là que l'argent sort du compte. Quand tout est rendu, la dette passe dans « Soldées ».</p>`],
+  ["Bilan du mois", `<p>Menu ⋮ → <b>Bilan du mois</b> : entrées, sorties, épargne, dépenses jour par jour, et où est parti l'argent par catégorie. Les flèches ‹ › changent de mois.</p>`],
+  ["Corriger un solde", `<p>Menu ⋮ → <b>Mes comptes</b> → ⋮ à côté du compte → <b>Corriger le solde</b>. Mets le montant exact affiché sur ton téléphone ou dans ta poche.</p>
+    <p>Si tu dois corriger souvent, c'est que des dépenses n'ont pas été notées.</p>`],
+  ["Supprimer une erreur", `<p>Touche l'opération dans l'historique ou sur l'accueil → <b>Supprimer</b>. Le solde du compte est remis comme avant automatiquement.</p>`],
+  ["Rappels", `<p>Après avoir activé les rappels (menu ⋮), tu reçois deux notifications par jour :</p>
+    <ul><li><b>14h30</b> : noter les dépenses du matin ;</li><li><b>22h30</b> : noter les dépenses faites depuis 14h30.</li></ul>
+    <p>Sur iPhone, il faut d'abord installer l'application sur l'écran d'accueil.</p>`],
+  ["Code secret et sans internet", `<p>Dans <b>Mes comptes</b> → <b>Sécurité</b>, tu peux mettre un code à 4 chiffres pour protéger l'application sur ton téléphone.</p>
+    <p>Tu peux noter tes dépenses <b>sans connexion</b> : elles s'enregistrent sur le téléphone et partent toutes seules dès que le réseau revient (« en attente de réseau »).</p>`]
+];
+const aideOpen = new Set([0, 1]);
+function aideView() {
+  return `${header()}<main class="page"><section class="card pad"><div class="label">Aide</div><p class="hint">Tout ce qu'il faut savoir, étape par étape. Touche une question pour voir la réponse.</p></section>
+  <div class="card aide">${AIDE.map(([q, a], i) => `<details data-ai="${i}" ${aideOpen.has(i) ? "open" : ""}><summary>${q}</summary><div class="rep">${a}</div></details>`).join("")}</div></main>`;
+}
 function bilanView() {
   const list = bilanTx || thisMonth(tx, bilanMonth);
   const prevD = new Date(bilanMonth.getFullYear(), bilanMonth.getMonth() - 1, 1), prev = thisMonth(tx, prevD);
@@ -345,7 +394,8 @@ function onboardingView() {
       <button class="btn btn-primary" id="usepreset">Charger mon profil</button><hr style="border:0;border-top:1px solid var(--line);width:100%">` : ""}
     <p>${preset ? "Ou commence à vide : " : ""}coche les comptes que tu utilises. Tu pourras en ajouter d'autres ensuite.</p>
     <div class="chk-list">${Object.entries(ACC_TYPES).map(([k, t]) => `<label class="chk"><input type="checkbox" value="${k}" ${k === "cash" ? "checked" : ""}><span>${t[0]}</span></label>`).join("")}</div>
-    <button class="btn ${preset ? "btn-secondary" : "btn-primary"}" id="start">Commencer</button></section></main>`;
+    <button class="btn ${preset ? "btn-secondary" : "btn-primary"}" id="start">Commencer</button>
+    <p class="hint">Besoin d'aide ? Après avoir commencé : menu ⋮ → <b>Aide</b>.</p></section></main>`;
   if ($("#usepreset")) $("#usepreset").onclick = async () => {
     $("#usepreset").disabled = true;
     const b = writeBatch(db);
@@ -402,7 +452,7 @@ function render() {
   if ($("#layer .sheet")) return;
   if (settings === null) { $("#app").innerHTML = `<div class="splash"><div class="logo">mon<b>argent</b></div></div>`; return; }
   if (!settings.ready && !accounts.length) { onboardingView(); bindCommon(); return; }
-  const V = { dettes: dettesView, accueil: accueilView, operations: operationsView, budget: budgetView, epargne: epargneView, bilan: bilanView, comptes: comptesView };
+  const V = { aide: aideView, dettes: dettesView, accueil: accueilView, operations: operationsView, budget: budgetView, epargne: epargneView, bilan: bilanView, comptes: comptesView };
   $("#app").innerHTML = (V[view] || accueilView)();
   bindCommon(); bindView();
 }
@@ -424,6 +474,7 @@ function bindCommon() {
   ], k => txSheet(k), null, null, true);
 }
 function bindView() {
+  document.querySelectorAll("[data-ai]").forEach(d => d.ontoggle = () => d.open ? aideOpen.add(+d.dataset.ai) : aideOpen.delete(+d.dataset.ai));
   document.querySelectorAll("[data-go]").forEach(b => b.onclick = () => { view = b.dataset.go; render(); scrollTo(0, 0); });
   document.querySelectorAll("[data-tx]").forEach(b => b.onclick = () => { const t = tx.find(x => x.id === b.dataset.tx); if (t) openMenu([["del", "Supprimer cette opération", "Le solde du compte est corrigé automatiquement"]], () => confirmDo("Supprimer cette opération ?", () => deleteTx(t)), b, null); });
   document.querySelectorAll("[data-pay]").forEach(b => b.onclick = () => { const f = fixed.find(x => x.id === b.dataset.pay); txSheet("depense", { amount: f.amount, cat: f.cat, note: f.name, fixedId: f.id, period: period(f) }); });
@@ -582,4 +633,4 @@ async function enableNotifs() {
 }
 addEventListener("online", () => { online = true; });
 addEventListener("offline", () => { online = false; });
-setInterval(() => { if (!document.hidden) render(); }, 60000);
+setInterval(() => { if (!document.hidden && view !== "aide") render(); }, 60000);

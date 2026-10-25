@@ -189,3 +189,13 @@ h1, h2, h3 { margin: 0; }
 
 .debt-sum { display: block; width: 100%; text-align: left; border: 0; font: inherit; color: inherit; cursor: pointer; }
 .goal .btn-sm { margin-top: 8px; align-self: flex-start; }
+
+.aide details { border-bottom: 1px solid var(--line); }
+.aide details:last-child { border-bottom: 0; }
+.aide summary, .aide-login summary { list-style: none; cursor: pointer; padding: 15px 16px; font-weight: 700; display: flex; justify-content: space-between; gap: 10px; }
+.aide summary::-webkit-details-marker, .aide-login summary::-webkit-details-marker { display: none; }
+.aide summary::after, .aide-login summary::after { content: "+"; color: var(--accent); font-size: 20px; line-height: 1; }
+.aide details[open] summary::after, .aide-login[open] summary::after { content: "−"; }
+.rep { padding: 0 16px 14px; color: #33413B; line-height: 1.5; }
+.rep p { margin: 0 0 8px; } .rep ol, .rep ul { margin: 0 0 8px; padding-left: 20px; } .rep li { margin-bottom: 5px; }
+.aide-login { margin-top: 12px; padding: 0; } .aide-login .rep { padding-top: 0; }
