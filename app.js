@@ -23,7 +23,7 @@ if ("serviceWorker" in navigator) {
   navigator.serviceWorker.addEventListener("controllerchange", () => { if (had && !re) { re = true; location.reload(); } });
   navigator.serviceWorker.register("sw.js", { updateViaCache: "none" }).then(r => { swReg = r; r.update().catch(() => {}); }).catch(() => {});
 }
-const APP_VERSION = "7";
+const APP_VERSION = "8";
 (async () => { try { const v = await (await fetch("version.json?t=" + Date.now(), { cache: "no-store" })).json();
   if (v.v !== APP_VERSION && sessionStorage.getItem("ma-r") !== v.v) { sessionStorage.setItem("ma-r", v.v); (await caches.keys()).forEach(k => caches.delete(k)); location.reload(); } } catch (e) {} })();
 
@@ -59,7 +59,7 @@ const weeksLeftInMonth = (d = new Date()) => { // lundis restants dans le mois, 
   while (m <= end) { n++; m.setDate(m.getDate() + 7); } return n; };
 
 /* ---------- état ---------- */
-let me = null, unsub = [], accounts = [], tx = [], fixed = [], goals = [], debts = [], settings = null, view = "accueil", online = navigator.onLine;
+let me = null, unsub = [], accounts = [], tx = [], fixed = [], goals = [], debts = [], reserves = [], settings = null, view = "accueil", online = navigator.onLine;
 let bilanMonth = monthStart(), bilanTx = null, unlocked = false;
 const col = name => collection(db, "users", me.uid, name);
 const ref = (name, id) => doc(db, "users", me.uid, name, id);
@@ -95,7 +95,7 @@ function loginView(mode = "in") {
   };
 }
 onAuthStateChanged(auth, u => {
-  unsub.forEach(f => f()); unsub = []; accounts = []; tx = []; fixed = []; goals = []; debts = []; settings = null; bilanTx = null;
+  unsub.forEach(f => f()); unsub = []; accounts = []; tx = []; fixed = []; goals = []; debts = []; reserves = []; settings = null; bilanTx = null;
   if (!u) { me = null; loginView(); return; }
   me = { uid: u.uid, email: u.email, name: u.displayName || u.email.split("@")[0] };
   unlocked = !localStorage.getItem("ma-pin-" + u.uid);
@@ -106,6 +106,7 @@ onAuthStateChanged(auth, u => {
     tx = s.docs.map(d => ({ id: d.id, ...d.data(), _p: d.metadata.hasPendingWrites })).sort((a, b) => b.date.localeCompare(a.date) || b.ts - a.ts); bilanTx = null; render(); }, () => {}));
   unsub.push(onSnapshot(col("fixed"), s => { fixed = s.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => b.amount - a.amount); render(); }, () => {}));
   unsub.push(onSnapshot(col("goals"), s => { goals = s.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (a.order || 0) - (b.order || 0)); render(); }, () => {}));
+  unsub.push(onSnapshot(col("reserves"), s => { reserves = s.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (a.order || 0) - (b.order || 0) || a.ts - b.ts); render(); }, () => {}));
   unsub.push(onSnapshot(col("debts"), s => { debts = s.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (a.amount - (a.paid || 0) <= 0) - (b.amount - (b.paid || 0) <= 0) || b.ts - a.ts); render(); }, () => {}));
   render();
 });
@@ -117,10 +118,16 @@ const sumBy = (list, k) => list.filter(t => t.kind === k).reduce((a, t) => a + t
 const monthlyNeed = () => fixed.reduce((a, f) => a + (f.freq === "semaine" ? f.amount * W : f.amount), 0);
 const period = (f, d = new Date()) => f.freq === "semaine" ? "s" + wk(d) : "m" + mk(d);
 const paidFixed = f => tx.some(t => t.fixedId === f.id && t.period === period(f));
-function remainingFixedMonth() { // ce qu'il reste à payer en charges fixes d'ici la fin du mois
+function remainingFixedMonth() { // ce qu'il reste à payer en charges fixes d'ici la fin du mois, moins ce qui est déjà en réserve pour elles
   const wl = weeksLeftInMonth();
-  return fixed.reduce((a, f) => a + (f.freq === "semaine" ? f.amount * (wl - (paidFixed(f) ? 1 : 0)) : (paidFixed(f) ? 0 : f.amount)), 0);
+  return fixed.reduce((a, f) => {
+    const due = f.freq === "semaine" ? f.amount * (wl - (paidFixed(f) ? 1 : 0)) : (paidFixed(f) ? 0 : f.amount);
+    const kept = reserves.filter(r => r.fixedId === f.id).reduce((x, r) => x + (r.saved || 0), 0);
+    return a + Math.max(0, due - kept);
+  }, 0);
 }
+const reserved = () => reserves.reduce((a, r) => a + (r.saved || 0), 0);
+const weekPut = r => tx.filter(t => t.kind === "reserve" && t.reserve === r.id && t.date >= wk(new Date())).reduce((a, t) => a + t.amount, 0);
 const savedThisMonth = () => thisMonth().filter(t => t.kind === "epargne").reduce((a, t) => a + t.amount, 0) - thisMonth().filter(t => t.kind === "retrait").reduce((a, t) => a + t.amount, 0);
 function resteAVivre() {
   const now = new Date(), left = daysInMonth(now) - now.getDate() + 1;
@@ -142,7 +149,11 @@ function saveTx(t) {
 }
 function applyTx(b, t, s) {
   const acc = id => id && accounts.find(a => a.id === id) ? ref("accounts", id) : null;
-  if (t.kind === "depense" && acc(t.account)) b.update(acc(t.account), { balance: increment(-s * t.amount) });
+  const res = id => id && reserves.find(r => r.id === id) ? ref("reserves", id) : null;
+  if (t.kind === "depense" && t.reserve) { if (res(t.reserve)) b.update(res(t.reserve), { saved: increment(-s * t.amount) }); }
+  else if (t.kind === "depense" && acc(t.account)) b.update(acc(t.account), { balance: increment(-s * t.amount) });
+  if (t.kind === "reserve") { if (acc(t.account)) b.update(acc(t.account), { balance: increment(-s * t.amount) }); if (res(t.reserve)) b.update(res(t.reserve), { saved: increment(s * t.amount) }); }
+  if (t.kind === "liberer") { if (acc(t.account)) b.update(acc(t.account), { balance: increment(s * t.amount) }); if (res(t.reserve)) b.update(res(t.reserve), { saved: increment(-s * t.amount) }); }
   if (t.kind === "revenu" && acc(t.account)) b.update(acc(t.account), { balance: increment(s * t.amount) });
   if (t.kind === "transfert") {
     if (acc(t.account)) b.update(acc(t.account), { balance: increment(-s * (t.amount + (t.fee || 0))) });
@@ -155,18 +166,20 @@ function applyTx(b, t, s) {
 function deleteTx(t) { const b = writeBatch(db); b.delete(ref("tx", t.id)); applyTx(b, t, -1); b.commit().then(() => toast("Opération supprimée")).catch(() => toast("Suppression refusée")); }
 
 /* ---------- vues ---------- */
-const VIEWS = { accueil: "Accueil", operations: "Opérations", budget: "Budget & charges", epargne: "Épargne & projets", dettes: "Mes dettes", bilan: "Bilan du mois", comptes: "Mes comptes", aide: "Aide" };
+const VIEWS = { accueil: "Accueil", reserves: "Mises en réserve", operations: "Opérations", budget: "Budget & charges", epargne: "Épargne & projets", dettes: "Mes dettes", bilan: "Bilan du mois", comptes: "Mes comptes", aide: "Aide" };
 function header() {
   return `<header class="topbar"><div class="topbar-in"><div class="logo small">mon<b>argent</b></div>
     <div class="top-right"><span class="view-name">${VIEWS[view]}</span><button class="icon-btn" id="menu" aria-label="Menu">⋮</button></div></div></header>`;
 }
 const accName = id => (accounts.find(a => a.id === id) || {}).name || "Compte supprimé";
 function txRow(t) {
-  const c = CAT[t.cat] || { n: t.kind === "transfert" ? "Transfert" : t.kind === "epargne" ? "Épargne" : t.kind === "retrait" ? "Retrait d'épargne" : "Opération", i: t.kind === "transfert" ? "⇄" : t.kind === "epargne" ? "🐖" : "↩️" };
-  const sign = t.kind === "revenu" || t.kind === "retrait" ? "+" : t.kind === "transfert" ? "" : "−";
-  const cls = t.kind === "revenu" || t.kind === "retrait" ? "in" : t.kind === "transfert" ? "tr" : "out";
+  const resName = (reserves.find(r => r.id === t.reserve) || {}).name || "réserve";
+  const c = t.kind === "reserve" ? { n: "Mis en réserve · " + resName, i: "🔒" } : t.kind === "liberer" ? { n: "Libéré de la réserve · " + resName, i: "🔓" } :
+    CAT[t.cat] || { n: t.kind === "transfert" ? "Transfert" : t.kind === "epargne" ? "Épargne" : t.kind === "retrait" ? "Retrait d'épargne" : "Opération", i: t.kind === "transfert" ? "⇄" : t.kind === "epargne" ? "🐖" : "↩️" };
+  const sign = t.kind === "revenu" || t.kind === "retrait" || t.kind === "liberer" ? "+" : t.kind === "transfert" || t.kind === "reserve" ? "" : "−";
+  const cls = t.kind === "revenu" || t.kind === "retrait" || t.kind === "liberer" ? "in" : t.kind === "transfert" || t.kind === "reserve" ? "tr" : "out";
   const goal = t.goal ? (goals.find(g => g.id === t.goal) || {}).name : "";
-  const sub = t.kind === "transfert" ? `${accName(t.account)} → ${accName(t.to)}${t.fee ? ` · frais ${FCFA(t.fee)}` : ""}` : `${accName(t.account)}${goal ? " · " + goal : ""}${t.note ? " · " + t.note : ""}`;
+  const sub = t.kind === "transfert" ? `${accName(t.account)} → ${accName(t.to)}${t.fee ? ` · frais ${FCFA(t.fee)}` : ""}` : `${t.kind === "depense" && t.reserve ? "🔒 " + resName : accName(t.account)}${goal ? " · " + goal : ""}${t.note ? " · " + t.note : ""}`;
   return `<button class="li btnli" data-tx="${t.id}"><span class="ic">${c.i}</span><span class="mid"><b>${esc(t.note && t.kind !== "transfert" && !goal ? (c.n) : c.n)}</b><small>${esc(sub)}${t._p ? " · en attente de réseau" : ""}</small></span>
     <span class="amt ${cls} num">${sign}${FCFA(t.amount)}</span></button>`;
 }
@@ -187,13 +200,15 @@ function accueilView() {
   const over = budgetsOver(); if (over.length) alerts.push(["warn", `Budget dépassé : ${over.map(o => o.n).join(", ")}.`]);
   if (!today.length && new Date().getHours() >= 19) alerts.push(["warn", "Tu n'as noté aucune dépense aujourd'hui. Même 100 F compte."]);
   return `${header()}<main class="page">
-  <section class="hero"><div><div class="k">Solde total · ${accounts.length} compte${accounts.length > 1 ? "s" : ""}</div><div class="big num">${FCFA(total())}</div></div>
+  <section class="hero"><div><div class="k">Disponible · ${accounts.length} compte${accounts.length > 1 ? "s" : ""}</div><div class="big num">${FCFA(total())}</div>
+    ${reserved() ? `<button class="hero-res" data-go="reserves">🔒 En réserve : <b class="num">${FCFA(reserved())}</b> · total réel ${FCFA(total() + reserved())} ›</button>` : ""}</div>
     <div class="row3"><div><span>Entrées du mois</span><b class="num">${FCFA(inc)}</b></div><div><span>Sorties du mois</span><b class="num">${FCFA(out)}</b></div><div><span>Épargné ce mois</span><b class="num">${FCFA(savedThisMonth())}</b></div></div></section>
   ${alerts.map(([c, t]) => `<div class="alert ${c}">${esc(t)}</div>`).join("")}
   ${empty ? "" : `<section class="card pad rav ${r.perDay >= 0 ? "ok" : "ko"}"><div><div class="label">Reste à vivre</div><div class="v num">${FCFA(r.perDay)} / jour</div>
     <p class="hint">Pendant ${r.left} jour${r.left > 1 ? "s" : ""}, après tes charges fixes restantes (${FCFA(remainingFixedMonth())}) et l'épargne prévue (${FCFA(r.saveLeft)}).</p></div></section>`}
   ${need ? `<section class="card pad"><div class="label">Revenus de la semaine</div><div class="rav ${wi >= need ? "ok" : "ko"}"><div class="v num">${FCFA(wi)}</div><span class="hint num">objectif ${FCFA(need)}</span></div>
     <div class="bar ${wi >= need ? "" : "warn"}"><i style="width:${Math.min(100, need ? wi / need * 100 : 0)}%"></i></div></section>` : ""}
+  ${reservesWeekCard()}
   ${debtLeft() ? `<button class="card pad btnli debt-sum" data-go="dettes"><div class="label">Mes dettes</div><div class="rav ko"><div class="v num">${FCFA(debtLeft())}</div><span class="hint">${openDebts().length} à rembourser ›</span></div></button>` : ""}
   <div class="sec"><h2>Mes comptes</h2><button class="link" data-go="comptes">Gérer</button></div>
   <div class="accounts">${accounts.map(a => accCard(a)).join("") || `<div class="card empty">Ajoute tes comptes pour commencer.</div>`}</div>
@@ -251,6 +266,74 @@ function epargneView() {
       <div class="bar"><i style="width:${Math.min(100, r * 100)}%"></i></div>
       <small>${!g.target ? "Touche ⋮ pour fixer le prix." : share || g.saved >= g.target ? horizon(g.target - g.saved, share) : "Touche ⋮ et fixe une part par mois pour savoir quand tu l'atteindras."}</small></div>`; }).join("") || `<div class="empty">Moto, meubles, téléphone, études… Crée un projet et mets de l'argent dedans petit à petit.</div>`}</div>
   </main>${fab()}`;
+}
+function reservesWeekCard() {
+  const w = reserves.filter(r => r.perWeek);
+  if (!w.length) return reserves.length ? "" : `<button class="card pad btnli debt-sum" data-go="reserves"><div class="label">Mises en réserve</div><p class="hint">Range à l'avance l'argent du loyer, du courant, de la tontine… pour ne pas le dépenser par erreur ›</p></button>`;
+  const need = w.reduce((a, r) => a + r.perWeek, 0), put = w.reduce((a, r) => a + Math.min(r.perWeek, weekPut(r)), 0);
+  return `<button class="card pad btnli debt-sum" data-go="reserves"><div class="label">Mes parts de la semaine</div>
+    <div class="rav ${put >= need ? "ok" : "ko"}"><div class="v num">${FCFA(put)}</div><span class="hint num">sur ${FCFA(need)} ›</span></div>
+    <div class="bar ${put >= need ? "" : "warn"}"><i style="width:${Math.min(100, put / need * 100)}%"></i></div></button>`;
+}
+function reserveRow(r) {
+  const p = r.target ? (r.saved || 0) / r.target : 0, wp = weekPut(r), f = fixed.find(x => x.id === r.fixedId);
+  return `<div class="goal"><div class="top"><b>🔒 ${esc(r.name)}</b><button class="icon-btn dark" data-rs="${r.id}" aria-label="Options">⋮</button></div>
+    <div class="rav"><span class="num"><b>${FCFA(r.saved || 0)}</b>${r.target ? ` / ${FCFA(r.target)}` : ""}</span>${r.target ? `<span class="tag ${p >= 1 ? "ok" : ""}">${p >= 1 ? "Prêt ✓" : Math.floor(p * 100) + " %"}</span>` : ""}</div>
+    ${r.target ? `<div class="bar"><i style="width:${Math.min(100, p * 100)}%"></i></div>` : ""}
+    <small>${r.perWeek ? `Part de la semaine : ${FCFA(Math.min(wp, r.perWeek))} / ${FCFA(r.perWeek)}${wp >= r.perWeek ? " ✓" : ""}` : "Pas de part fixe par semaine"}${f ? ` · pour « ${esc(f.name)} »` : ""}${r.date ? ` · à payer le ${esc(r.date)}` : ""}</small>
+    <div class="row-btns"><button class="btn btn-primary btn-sm" data-rput="${r.id}">Mettre dedans</button>${r.saved ? `<button class="btn btn-secondary btn-sm" data-ruse="${r.id}">Payer avec</button>` : ""}</div></div>`;
+}
+function reservesView() {
+  const w = reserves.filter(r => r.perWeek), need = w.reduce((a, r) => a + r.perWeek, 0), put = w.reduce((a, r) => a + Math.min(r.perWeek, weekPut(r)), 0);
+  const free = fixed.filter(f => !reserves.some(r => r.fixedId === f.id) && f.freq !== "semaine");
+  return `${header()}<main class="page">
+  <section class="card pad"><div class="label">En réserve</div><div class="rav"><div class="v num">${FCFA(reserved())}</div><span class="hint">${reserves.length} réserve${reserves.length > 1 ? "s" : ""}</span></div>
+    <p class="hint">L'argent mis en réserve sort de ton « disponible ». Tu ne le vois plus comme de l'argent à dépenser : il attend la chose prévue (loyer, courant, tontine…). Pour payer, touche « Payer avec ».</p>
+    ${need ? `<div class="label" style="margin-top:8px">Parts de cette semaine</div><div class="rav ${put >= need ? "ok" : "ko"}"><div class="v num">${FCFA(put)}</div><span class="hint num">sur ${FCFA(need)}</span></div>
+      ${put < need ? `<button class="btn btn-primary btn-sm" id="rall">Mettre toutes mes parts de la semaine</button>` : ""}` : ""}</section>
+  <div class="sec"><h2>Mes réserves</h2><button class="link" id="addr">+ Nouvelle réserve</button></div>
+  <div class="card">${reserves.map(reserveRow).join("") || `<div class="empty">Crée une réserve pour chaque chose prévue : « Loyer de novembre », « Courant », « Tontine du 5 »… et mets-y l'argent dès que tu le reçois.</div>`}</div>
+  ${free.length ? `<button class="btn btn-secondary" id="rfromfixed">Créer une réserve pour chacune de mes charges du mois (${free.length})</button>` : ""}
+  </main>${fab()}`;
+}
+function reserveSheet(r = {}) {
+  sheet(r.id ? "Modifier la réserve" : "Nouvelle réserve", `<label class="fl"><span>Pour quoi ?</span><input class="field" id="rn" maxlength="40" value="${esc(r.name || "")}" placeholder="ex. Loyer de novembre, Courant, Tontine du 5"></label>
+    <div class="grid2"><label class="fl"><span>Montant visé</span><input class="field" id="rt" inputmode="numeric" value="${r.target || ""}" placeholder="facultatif"></label>
+    <label class="fl"><span>Part par semaine</span><input class="field" id="rw" inputmode="numeric" value="${r.perWeek || ""}" placeholder="facultatif"></label></div>
+    <div class="grid2"><label class="fl"><span>Pour la charge fixe</span><select class="field" id="rf"><option value="">Aucune</option>${fixed.map(f => `<option value="${f.id}" ${f.id === r.fixedId ? "selected" : ""}>${esc(f.name)} · ${FCFA(f.amount)}/${f.freq}</option>`).join("")}</select></label>
+    <label class="fl"><span>À payer le (facultatif)</span><input class="field" id="rd" maxlength="20" value="${esc(r.date || "")}" placeholder="ex. 5 du mois"></label></div>
+    <p class="hint">Exemple : loyer 45 000 F à payer le 5 → part par semaine 11 250 F. Chaque semaine tu mets ta part, et le jour venu l'argent est prêt.</p>`, () => {
+    const num = id => Math.round(+$(id).value.replace(/\D/g, "")) || 0;
+    const v = { name: $("#rn").value.trim(), target: num("#rt"), perWeek: num("#rw"), fixedId: $("#rf").value, date: $("#rd").value.trim() };
+    if (!v.name) { $("#se").textContent = "Écris à quoi sert cette réserve."; return false; }
+    if (r.id) updateDoc(ref("reserves", r.id), v).catch(() => toast("Échec de l'enregistrement."));
+    else setDoc(doc(col("reserves")), { ...v, saved: 0, order: reserves.length, ts: Date.now() }).catch(() => toast("Échec de l'enregistrement."));
+    toast(r.id ? "Réserve modifiée" : "Réserve créée");
+  });
+  const sync = () => { const f = fixed.find(x => x.id === $("#rf").value); if (!f) return;
+    if (!$("#rn").value) $("#rn").value = f.name; if (!$("#rt").value) $("#rt").value = f.amount;
+    if (!$("#rw").value) $("#rw").value = f.freq === "semaine" ? f.amount : Math.ceil(f.amount / 4); };
+  $("#rf").onchange = sync;
+}
+function moveSheet(kind, r, preAmount) {
+  const put = kind === "reserve";
+  const last = JSON.parse(localStorage.getItem("ma-last") || "{}"), defAcc = accounts.find(a => a.id === last.reserveAcc) ? last.reserveAcc : accounts[0]?.id;
+  if (!accounts.length) { toast("Ajoute d'abord un compte."); return; }
+  const w = sheet(put ? `Mettre dans « ${r.name} »` : `Libérer de « ${r.name} »`, `<input class="amount-in ${put ? "" : "in"}" id="amt" inputmode="numeric" placeholder="0" autocomplete="off"><div class="cur">FCFA</div>
+    <label class="fl"><span>${put ? "Depuis le compte" : "Remettre sur le compte"}</span><select class="field" id="acc">${accOptions(defAcc)}</select></label>
+    <p class="hint">${put ? "L'argent reste réellement sur ton compte, mais l'appli ne le compte plus comme « disponible »." : `Il y a ${FCFA(r.saved || 0)} dans cette réserve. L'argent libéré redevient « disponible ».`}</p>`, () => {
+    const amount = Math.round(+$("#amt").value.replace(/\D/g, ""));
+    if (!amount) { $("#se").textContent = "Écris un montant."; return false; }
+    if (!put && amount > (r.saved || 0)) { $("#se").textContent = `Il n'y a que ${FCFA(r.saved || 0)} dans cette réserve.`; return false; }
+    const a = accounts.find(x => x.id === $("#acc").value);
+    if (put && a && a.balance - amount < 0 && !w.dataset.forced) { w.dataset.forced = "1"; $("#se").textContent = `${a.name} n'a que ${FCFA(a.balance)}. Touche encore pour confirmer.`; return false; }
+    saveTx({ kind, amount, account: $("#acc").value, reserve: r.id, date: dk(new Date()), note: "" });
+    last.reserveAcc = $("#acc").value; localStorage.setItem("ma-last", JSON.stringify(last));
+    toast(put ? `🔒 ${FCFA(amount)} mis en réserve` : `🔓 ${FCFA(amount)} libérés`);
+  });
+  $("#amt").oninput = e => { const d = e.target.value.replace(/\D/g, ""); e.target.value = d ? F(+d) : ""; };
+  if (preAmount) $("#amt").value = F(preAmount);
+  setTimeout(() => $("#amt")?.focus(), 60);
 }
 const leJour = x => { const p = prettyDay(x).toLowerCase(); return /^(aujourd|hier)/.test(p) ? p : "le " + p; };
 const debtRest = d => Math.max(0, d.amount - (d.paid || 0));
@@ -318,6 +401,12 @@ const AIDE = [
   ["Épargne et projets", `<p>Crée un projet (moto, téléphone, études…) avec son prix. Pour mettre de l'argent dedans : <b>+</b> → <b>Mettre de côté</b>, ou ⋮ sur le projet.</p>
     <p>L'argent quitte ton compte et va dans le projet. Si tu donnes une <b>part par mois</b>, l'application te dit quand tu atteindras le projet.</p>
     <p>Besoin de cet argent ? ⋮ → <b>Retirer de l'argent</b> : il revient sur le compte choisi.</p>`],
+  ["Mises en réserve", `<p>Une réserve, c'est une enveloppe pour une chose prévue : « Loyer de novembre », « Courant », « Tontine du 5 »… Menu ⋮ → <b>Mises en réserve</b> → <b>+ Nouvelle réserve</b>.</p>
+    <ol><li>Donne-lui un nom, le montant visé et, si tu veux, une <b>part par semaine</b> (ex. loyer 45 000 F → 11 250 F par semaine).</li>
+    <li>Quand tu reçois ton argent (le dimanche par exemple), touche <b>Mettre dedans</b> ou « Mettre toutes mes parts de la semaine ».</li>
+    <li>L'argent reste réellement sur ton compte, mais il sort du <b>disponible</b> : tu ne crois plus avoir beaucoup d'argent.</li>
+    <li>Le jour venu, touche <b>Payer avec</b> : la dépense est prise dans la réserve. Le bouton « Payer » d'une charge fixe utilise aussi sa réserve si elle est pleine.</li></ol>
+    <p>Besoin de l'argent ? ⋮ → <b>Libérer</b> : il redevient disponible.</p>`],
   ["Mes dettes", `<p><b>Ajouter une dette</b> (menu ⋮ → Mes dettes → + Nouvelle dette) : à qui tu dois, la somme, la date. <b>Tes comptes ne bougent pas.</b></p>
     <p><b>Rembourser</b> : touche « Rembourser » sur la dette, choisis le compte et la somme (tout ou une partie). C'est seulement là que l'argent sort du compte. Quand tout est rendu, la dette passe dans « Soldées ».</p>`],
   ["Bilan du mois", `<p>Menu ⋮ → <b>Bilan du mois</b> : entrées, sorties, épargne, dépenses jour par jour, et où est parti l'argent par catégorie. Les flèches ‹ › changent de mois.</p>`],
@@ -452,7 +541,7 @@ function render() {
   if ($("#layer .sheet")) return;
   if (settings === null) { $("#app").innerHTML = `<div class="splash"><div class="logo">mon<b>argent</b></div></div>`; return; }
   if (!settings.ready && !accounts.length) { onboardingView(); bindCommon(); return; }
-  const V = { aide: aideView, dettes: dettesView, accueil: accueilView, operations: operationsView, budget: budgetView, epargne: epargneView, bilan: bilanView, comptes: comptesView };
+  const V = { reserves: reservesView, aide: aideView, dettes: dettesView, accueil: accueilView, operations: operationsView, budget: budgetView, epargne: epargneView, bilan: bilanView, comptes: comptesView };
   $("#app").innerHTML = (V[view] || accueilView)();
   bindCommon(); bindView();
 }
@@ -470,14 +559,20 @@ function bindCommon() {
   }, $("#menu").parentElement, view);
   if ($("#fab")) $("#fab").onclick = () => openMenu([
     ["depense", "Dépense", "Ce qui sort, même 50 F"], ["revenu", "Entrée d'argent", "Ventes, salaire, cadeau…"],
-    ["transfert", "Transfert entre comptes", "MTN → Moov, retrait, dépôt…"], ["epargne", "Mettre de côté", "Pour un projet"]
-  ], k => txSheet(k), null, null, true);
+    ["transfert", "Transfert entre comptes", "MTN → Moov, retrait, dépôt…"], ["epargne", "Mettre de côté", "Pour un projet"], ["reserve", "Mettre en réserve", "Loyer, courant, tontine… prévus"]
+  ], k => {
+    if (k !== "reserve") return txSheet(k);
+    if (!reserves.length) { view = "reserves"; render(); reserveSheet(); return; }
+    openMenu(reserves.map(r => [r.id, "🔒 " + r.name, `${FCFA(r.saved || 0)}${r.perWeek ? ` · part ${FCFA(r.perWeek)}/sem.` : ""}`]), id => { const r = reserves.find(x => x.id === id); moveSheet("reserve", r, r.perWeek ? Math.max(0, r.perWeek - weekPut(r)) : 0); }, null, null, true);
+  }, null, null, true);
 }
 function bindView() {
   document.querySelectorAll("[data-ai]").forEach(d => d.ontoggle = () => d.open ? aideOpen.add(+d.dataset.ai) : aideOpen.delete(+d.dataset.ai));
   document.querySelectorAll("[data-go]").forEach(b => b.onclick = () => { view = b.dataset.go; render(); scrollTo(0, 0); });
   document.querySelectorAll("[data-tx]").forEach(b => b.onclick = () => { const t = tx.find(x => x.id === b.dataset.tx); if (t) openMenu([["del", "Supprimer cette opération", "Le solde du compte est corrigé automatiquement"]], () => confirmDo("Supprimer cette opération ?", () => deleteTx(t)), b, null); });
-  document.querySelectorAll("[data-pay]").forEach(b => b.onclick = () => { const f = fixed.find(x => x.id === b.dataset.pay); txSheet("depense", { amount: f.amount, cat: f.cat, note: f.name, fixedId: f.id, period: period(f) }); });
+  document.querySelectorAll("[data-pay]").forEach(b => b.onclick = () => { const f = fixed.find(x => x.id === b.dataset.pay);
+    const r = reserves.find(x => x.fixedId === f.id && (x.saved || 0) >= f.amount);
+    txSheet("depense", { amount: f.amount, cat: f.cat, note: f.name, fixedId: f.id, period: period(f), ...(r ? { reserve: r.id } : {}) }); });
   document.querySelectorAll("[data-acc]").forEach(b => b.onclick = () => { view = "comptes"; render(); });
   document.querySelectorAll("[data-ae]").forEach(b => b.onclick = () => { const a = accounts.find(x => x.id === b.dataset.ae);
     openMenu([["fix", "Corriger le solde", "Mettre le montant réel affiché sur ton téléphone"], ["ren", "Renommer", ""], ["del", "Supprimer le compte", "L'historique est gardé"]], k => {
@@ -496,6 +591,39 @@ function bindView() {
   if ($("#setsave")) $("#setsave").onclick = () => formSheet("Épargne mensuelle visée", [["v", "Montant par mois en FCFA", "number", settings.saveMonth || ""]], v => setDoc(doc(db, "users", me.uid), { saveMonth: +v.v || 0 }, { merge: true }));
   if ($("#addg")) $("#addg").onclick = () => goalSheet();
   if ($("#addd")) $("#addd").onclick = () => debtSheet();
+  if ($("#addr")) $("#addr").onclick = () => reserveSheet();
+  document.querySelectorAll("[data-rput]").forEach(b => b.onclick = () => { const r = reserves.find(x => x.id === b.dataset.rput);
+    moveSheet("reserve", r, r.perWeek ? Math.max(0, r.perWeek - weekPut(r)) : r.target ? Math.max(0, r.target - (r.saved || 0)) : 0); });
+  document.querySelectorAll("[data-ruse]").forEach(b => b.onclick = () => { const r = reserves.find(x => x.id === b.dataset.ruse), f = fixed.find(x => x.id === r.fixedId);
+    txSheet("depense", { reserve: r.id, amount: Math.min(r.saved, f ? f.amount : r.saved), cat: f ? f.cat : undefined, note: r.name, ...(f && !paidFixed(f) ? { fixedId: f.id, period: period(f) } : {}) }); });
+  document.querySelectorAll("[data-rs]").forEach(b => b.onclick = () => { const r = reserves.find(x => x.id === b.dataset.rs);
+    openMenu([["put", "Mettre de l'argent dedans", ""], ...(r.saved ? [["use", "Payer avec cette réserve", "La dépense est prise dans la réserve"], ["free", "Libérer de l'argent", "Le remettre en « disponible »"]] : []),
+      ["edit", "Modifier", "Nom, montant, part par semaine"], ["del", "Supprimer la réserve", r.saved ? "Libère d'abord l'argent qu'elle contient" : ""]], k => {
+      if (k === "put") moveSheet("reserve", r, r.perWeek ? Math.max(0, r.perWeek - weekPut(r)) : 0);
+      if (k === "use") document.querySelector(`[data-ruse="${r.id}"]`)?.click();
+      if (k === "free") moveSheet("liberer", r, r.saved);
+      if (k === "edit") reserveSheet(r);
+      if (k === "del") { if (r.saved) { toast("Libère d'abord l'argent de cette réserve."); return; } confirmDo(`Supprimer la réserve « ${r.name} » ?`, () => deleteDoc(ref("reserves", r.id))); }
+    }, b.parentElement); });
+  if ($("#rall")) $("#rall").onclick = () => {
+    const todo = reserves.filter(r => r.perWeek && weekPut(r) < r.perWeek).map(r => [r, r.perWeek - weekPut(r)]);
+    const sum = todo.reduce((a, [, v]) => a + v, 0);
+    const last = JSON.parse(localStorage.getItem("ma-last") || "{}"), defAcc = accounts.find(a => a.id === last.reserveAcc) ? last.reserveAcc : accounts[0]?.id;
+    sheet("Mettre toutes mes parts de la semaine", `<div class="list">${todo.map(([r, v]) => `<div class="li"><span class="ic">🔒</span><span class="mid"><b>${esc(r.name)}</b></span><span class="num">${FCFA(v)}</span></div>`).join("")}</div>
+      <label class="fl"><span>Depuis le compte</span><select class="field" id="acc">${accOptions(defAcc)}</select></label><p class="hint">Total : <b class="num">${FCFA(sum)}</b></p>`, () => {
+      const acc = $("#acc").value, b = writeBatch(db), d = dk(new Date());
+      todo.forEach(([r, v]) => { const t = { kind: "reserve", amount: v, account: acc, reserve: r.id, date: d, note: "", ts: Date.now() }; b.set(doc(col("tx")), t); applyTx(b, t, 1); });
+      b.commit().catch(() => toast("Enregistrement refusé."));
+      last.reserveAcc = acc; localStorage.setItem("ma-last", JSON.stringify(last));
+      toast(`🔒 ${FCFA(sum)} mis en réserve`);
+    }, "Tout mettre en réserve");
+  };
+  if ($("#rfromfixed")) $("#rfromfixed").onclick = () => {
+    const free = fixed.filter(f => !reserves.some(r => r.fixedId === f.id) && f.freq !== "semaine");
+    const b = writeBatch(db);
+    free.forEach((f, i) => b.set(doc(col("reserves")), { name: f.name, target: f.amount, perWeek: Math.ceil(f.amount / 4), fixedId: f.id, date: "", saved: 0, order: reserves.length + i, ts: Date.now() + i }));
+    b.commit().then(() => toast(`${free.length} réserves créées`)).catch(() => toast("Échec."));
+  };
   document.querySelectorAll("[data-pd]").forEach(b => b.onclick = () => { const d = debts.find(x => x.id === b.dataset.pd); txSheet("depense", { amount: debtRest(d), cat: "dette", note: d.who, debt: d.id }); });
   document.querySelectorAll("[data-d]").forEach(b => b.onclick = () => { const d = debts.find(x => x.id === b.dataset.d);
     openMenu([...(debtRest(d) ? [["pay", "Rembourser", "Tout ou une partie · l'argent sort du compte choisi"]] : []), ["edit", "Modifier", "Nom, somme, date"], ["del", "Supprimer la dette", "Les remboursements déjà faits restent dans l'historique"]], k => {
@@ -546,7 +674,8 @@ const accOptions = sel => accounts.map(a => `<option value="${a.id}" ${a.id === 
 function txSheet(kind, pre = {}) {
   if (!accounts.length) { toast("Ajoute d'abord un compte."); view = "comptes"; render(); return; }
   const last = JSON.parse(localStorage.getItem("ma-last") || "{}");
-  const titles = { depense: pre.debt ? "Rembourser " + ((debts.find(d => d.id === pre.debt) || {}).who || "") : "Nouvelle dépense", revenu: "Entrée d'argent", transfert: "Transfert entre comptes", epargne: "Mettre de côté", retrait: "Retirer d'un projet" };
+  const resv = pre.reserve ? reserves.find(r => r.id === pre.reserve) : null;
+  const titles = { depense: resv ? `Payer avec « ${resv.name} »` : pre.debt ? "Rembourser " + ((debts.find(d => d.id === pre.debt) || {}).who || "") : "Nouvelle dépense", revenu: "Entrée d'argent", transfert: "Transfert entre comptes", epargne: "Mettre de côté", retrait: "Retirer d'un projet" };
   const cats = kind === "revenu" ? CAT_IN : CAT_OUT;
   const usage = {}; tx.forEach(t => usage[t.cat] = (usage[t.cat] || 0) + 1);
   const sorted = [...cats].sort((a, b) => (usage[b[0]] || 0) - (usage[a[0]] || 0));
@@ -555,7 +684,8 @@ function txSheet(kind, pre = {}) {
   const body = `<input class="amount-in ${kind === "revenu" || kind === "retrait" ? "in" : kind === "transfert" ? "" : "out"}" id="amt" inputmode="numeric" placeholder="0" value="${pre.amount || ""}" autocomplete="off"><div class="cur">FCFA</div>
     ${kind === "depense" || kind === "revenu" ? `<label class="fl"><span>Catégorie</span><select class="field" id="cat">${sorted.map(([k, n, i]) => `<option value="${k}" ${k === defCat ? "selected" : ""}>${i} ${n}</option>`).join("")}</select></label>` : ""}
     ${kind === "epargne" || kind === "retrait" ? `<label class="fl"><span>Projet</span><select class="field" id="goal">${goals.map(g => `<option value="${g.id}" ${g.id === pre.goal ? "selected" : ""}>${esc(g.name)} · ${FCFA(g.saved)}</option>`).join("")}</select></label>` : ""}
-    <div class="${kind === "transfert" ? "grid2" : ""}"><label class="fl"><span>${kind === "transfert" ? "Depuis" : kind === "revenu" || kind === "retrait" ? "Sur le compte" : "Payé avec"}</span><select class="field" id="acc">${accOptions(defAcc)}</select></label>
+    ${resv ? `<p class="hint">🔒 Payé avec la réserve « ${esc(resv.name)} » (${FCFA(resv.saved || 0)}). Tes comptes disponibles ne bougent pas.</p>` : ""}
+    <div class="${kind === "transfert" ? "grid2" : ""}" ${resv ? "hidden" : ""}><label class="fl"><span>${kind === "transfert" ? "Depuis" : kind === "revenu" || kind === "retrait" ? "Sur le compte" : "Payé avec"}</span><select class="field" id="acc">${accOptions(defAcc)}</select></label>
     ${kind === "transfert" ? `<label class="fl"><span>Vers</span><select class="field" id="to">${accOptions(accounts[1] ? accounts.find(a => a.id !== defAcc).id : defAcc)}</select></label>` : ""}</div>
     ${kind === "transfert" ? `<label class="fl"><span>Frais de transfert (facultatif)</span><input class="field" id="fee" inputmode="numeric" placeholder="0"></label>` : ""}
     <div class="grid2"><label class="fl"><span>Date</span><input class="field" id="date" type="date" value="${dk(new Date())}" max="${dk(new Date())}"></label>
@@ -567,14 +697,15 @@ function txSheet(kind, pre = {}) {
     if ($("#cat")) { t.cat = $("#cat").value; t.scope = isBiz(t.cat) ? "business" : "perso"; }
     if ($("#goal")) { if (!goals.length) { $("#se").textContent = "Crée d'abord un projet dans Épargne."; return false; } t.goal = $("#goal").value; }
     if (kind === "transfert") { t.to = $("#to").value; t.fee = Math.round(+($("#fee").value || "0").replace(/\D/g, "")); if (t.to === t.account) { $("#se").textContent = "Choisis deux comptes différents."; return false; } }
-    if (pre.fixedId) { t.fixedId = pre.fixedId; t.period = pre.period; }
+    if (pre.fixedId && amount >= ((fixed.find(f => f.id === pre.fixedId) || {}).amount || 0)) { t.fixedId = pre.fixedId; t.period = pre.period; }
+    if (resv) { if (amount > (resv.saved || 0)) { $("#se").textContent = `La réserve ne contient que ${FCFA(resv.saved || 0)}.`; return false; } t.reserve = resv.id; t.account = ""; }
     if (pre.debt) { const d = debts.find(x => x.id === pre.debt); if (d && amount > debtRest(d)) { $("#se").textContent = `Il ne reste que ${FCFA(debtRest(d))} à rembourser.`; return false; } t.debt = pre.debt; t.cat = "dette"; t.scope = "perso"; }
     const a = accounts.find(x => x.id === t.account);
-    if ((kind === "depense" || kind === "transfert" || kind === "epargne") && a && a.balance - amount - (t.fee || 0) < 0 && !w.dataset.forced) {
+    if (!resv && (kind === "depense" || kind === "transfert" || kind === "epargne") && a && a.balance - amount - (t.fee || 0) < 0 && !w.dataset.forced) {
       w.dataset.forced = "1"; $("#se").textContent = `Le solde de ${a.name} deviendrait négatif (${FCFA(a.balance - amount - (t.fee || 0))}). Vérifie le compte, ou touche encore Enregistrer.`; return false;
     }
     saveTx(t);
-    last[kind + "Acc"] = t.account; if (t.cat) last[kind + "Cat"] = t.cat; localStorage.setItem("ma-last", JSON.stringify(last));
+    if (!resv) last[kind + "Acc"] = t.account; if (t.cat) last[kind + "Cat"] = t.cat; localStorage.setItem("ma-last", JSON.stringify(last));
     const over = t.cat && settings?.budgets?.[t.cat] ? thisMonth().filter(x => x.kind === "depense" && x.cat === t.cat).reduce((s, x) => s + x.amount, 0) + amount - settings.budgets[t.cat] : 0;
     toast(over > 0 ? `Noté. Budget « ${CAT[t.cat].n} » dépassé de ${FCFA(over)} !` : "Noté ✓");
   });

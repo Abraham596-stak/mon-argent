@@ -199,3 +199,7 @@ h1, h2, h3 { margin: 0; }
 .rep { padding: 0 16px 14px; color: #33413B; line-height: 1.5; }
 .rep p { margin: 0 0 8px; } .rep ol, .rep ul { margin: 0 0 8px; padding-left: 20px; } .rep li { margin-bottom: 5px; }
 .aide-login { margin-top: 12px; padding: 0; } .aide-login .rep { padding-top: 0; }
+
+.hero-res { display: block; margin-top: 8px; background: rgba(255,255,255,.12); color: #fff; border: 0; border-radius: 999px; padding: 6px 12px; font: inherit; font-size: 13px; cursor: pointer; text-align: left; }
+.row-btns { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+.row-btns .btn-sm { margin-top: 0; }
